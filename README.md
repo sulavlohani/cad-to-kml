@@ -1,5 +1,5 @@
 ---
-title: CAD (DXF) to KML Converter
+title: DXF to KML Converter
 emoji: 🗺️
 colorFrom: blue
 colorTo: purple
@@ -9,4 +9,4 @@ app_file: app.py
 pinned: false
 ---
 
-Convert AutoCAD **DXF** to **KML** (EPSG:4326) with reprojection + map preview.
+DXF → KML Converter with reprojection and map preview.
