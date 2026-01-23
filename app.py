@@ -10,16 +10,16 @@ import ezdxf
 from pyproj import CRS, Transformer
 import simplekml
 
-# ezdxf geo helpers (explicit imports are more stable than "from ezdxf.addons import geo")
+# ezdxf geo helpers
 from ezdxf.addons.geo import proxy, gfilter
 
 
 # ----------------------------
 # Settings (no UI for flattening)
 # ----------------------------
-DEFAULT_FLATTENING_DISTANCE = 0.5  # good general default for arcs/splines -> segments
+DEFAULT_FLATTENING_DISTANCE = 0.5  # internal default (good general value)
 
-TARGET_VALUE = "EPSG:4326"         # KML should be lon/lat WGS84
+TARGET_VALUE = "EPSG:4326"         # KML output in WGS84 lon/lat
 TARGET_CRS = CRS.from_epsg(4326)
 
 
@@ -40,22 +40,20 @@ def nepal_mutm_proj(lon0: int) -> str:
 
 def build_source_choices() -> List[Tuple[str, str]]:
     choices: List[Tuple[str, str]] = []
-
-    # Auto + Custom
     choices.append(("Auto-detect from DXF (GEODATA / PRJ)", "__AUTO__"))
 
-    # Common global systems
+    # Common
     choices.append(("WGS84 (Lat/Long) — EPSG:4326", "EPSG:4326"))
     choices.append(("Web Mercator — EPSG:3857", "EPSG:3857"))
     choices.append(("World Mercator — EPSG:3395", "EPSG:3395"))
 
-    # Nepal (from your reference idea)
+    # Nepal (optional presets)
     choices.append(("Nepal 1981 (Everest 1830) — EPSG:6207", "EPSG:6207"))
     choices.append(("Nepal MUTM 81 (Everest 1830) — CM 81°E", nepal_mutm_proj(81)))
     choices.append(("Nepal MUTM 84 (Everest 1830) — CM 84°E", nepal_mutm_proj(84)))
     choices.append(("Nepal MUTM 87 (Everest 1830) — CM 87°E", nepal_mutm_proj(87)))
 
-    # UTM WGS84 zones
+    # UTM Zones
     for z in range(1, 61):
         zz = f"{z:02d}"
         choices.append((f"UTM Zone {zz}N (WGS84) — EPSG:{32600+z}", f"EPSG:{32600+z}"))
@@ -76,15 +74,9 @@ TARGET_CHOICES = [("WGS84 for KML — EPSG:4326", "EPSG:4326")]
 # Auto-detect Source CRS (best-effort)
 # ----------------------------
 def detect_source_crs(dxf_path: str) -> Tuple[Optional[str], str]:
-    """
-    Returns (crs_input or None, message)
-    Priority:
-      1) sidecar .prj (same base name)
-      2) DXF embedded GEODATA (if present)
-    """
     p = Path(dxf_path)
 
-    # 1) Sidecar PRJ (most reliable if provided)
+    # 1) Sidecar PRJ
     prj = p.with_suffix(".prj")
     if prj.exists():
         try:
@@ -95,19 +87,17 @@ def detect_source_crs(dxf_path: str) -> Tuple[Optional[str], str]:
                 if auth and auth[0].upper() == "EPSG":
                     epsg_val = f"EPSG:{auth[1]}"
                     return epsg_val, f"Detected Source CRS from sidecar PRJ: {epsg_val}"
-                # If not EPSG authority, still usable as CUSTOM input
-                return txt, "Detected Source CRS from sidecar PRJ (no EPSG code, but usable as Custom)."
+                return txt, "Detected Source CRS from sidecar PRJ (usable as Custom)."
         except Exception:
             pass
 
-    # 2) DXF GEODATA (if author assigned geographic location)
+    # 2) DXF GEODATA
     try:
         doc = ezdxf.readfile(str(p))
         geodata = doc.modelspace().get_geodata()
         if geodata is None:
             return None, "Auto-detect: No GEODATA found in DXF (no embedded CRS)."
 
-        # geodata.get_crs() often returns (epsg, axis_order_flag) in ezdxf
         try:
             res = geodata.get_crs()
             epsg = None
@@ -124,11 +114,9 @@ def detect_source_crs(dxf_path: str) -> Tuple[Optional[str], str]:
         except Exception:
             pass
 
-        # If no EPSG extracted, try the definition text (may be XML/WKT-like)
         cs_def = getattr(geodata, "coordinate_system_definition", None)
         if cs_def and str(cs_def).strip():
-            # Keep it as custom input; user can still override
-            return str(cs_def).strip(), "GEODATA found, but EPSG not extracted. Using CRS definition as Custom."
+            return str(cs_def).strip(), "GEODATA found, EPSG not extracted. Using CRS definition as Custom."
         return None, "Auto-detect: GEODATA present but CRS definition could not be read."
 
     except Exception as e:
@@ -136,51 +124,61 @@ def detect_source_crs(dxf_path: str) -> Tuple[Optional[str], str]:
 
 
 # ----------------------------
-# Geometry utilities (handles 2D/3D points)
+# Geometry utilities
 # ----------------------------
 def _xy(pt: Any) -> Tuple[float, float]:
-    """
-    Convert (x,y) or (x,y,z) to (x,y).
-    """
+    # Accept [x,y] or [x,y,z] and return x,y
     if not isinstance(pt, (list, tuple)) or len(pt) < 2:
         raise ValueError("Invalid coordinate point.")
     return float(pt[0]), float(pt[1])
 
 def explode_to_geometries(mapping: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    SAFE: handles cases where 'features' or 'geometries' is None
+    """
+    if not isinstance(mapping, dict):
+        return []
+
     t = mapping.get("type")
 
     if t == "Feature":
-        return explode_to_geometries(mapping["geometry"])
+        geom = mapping.get("geometry")
+        return explode_to_geometries(geom) if isinstance(geom, dict) else []
 
     if t == "FeatureCollection":
         out: List[Dict[str, Any]] = []
-        for f in mapping.get("features", []):
+        for f in (mapping.get("features") or []):
             out.extend(explode_to_geometries(f))
         return out
 
     if t == "GeometryCollection":
         out: List[Dict[str, Any]] = []
-        for g in mapping.get("geometries", []):
+        for g in (mapping.get("geometries") or []):
             out.extend(explode_to_geometries(g))
         return out
 
     if t in ("Point", "LineString", "Polygon"):
         return [mapping]
 
+    coords = mapping.get("coordinates") or []
+
     if t == "MultiPoint":
-        return [{"type": "Point", "coordinates": c} for c in mapping["coordinates"]]
+        return [{"type": "Point", "coordinates": c} for c in coords]
 
     if t == "MultiLineString":
-        return [{"type": "LineString", "coordinates": c} for c in mapping["coordinates"]]
+        return [{"type": "LineString", "coordinates": c} for c in coords]
 
     if t == "MultiPolygon":
-        return [{"type": "Polygon", "coordinates": c} for c in mapping["coordinates"]]
+        return [{"type": "Polygon", "coordinates": c} for c in coords]
 
     return []
 
 def transform_geometry(geom: Dict[str, Any], tf: Transformer) -> Dict[str, Any]:
-    t = geom["type"]
-    c = geom["coordinates"]
+    t = geom.get("type")
+    c = geom.get("coordinates")
+
+    if c is None:
+        raise ValueError("Geometry has no coordinates.")
 
     def tx_point(p):
         x, y = _xy(p)
@@ -191,10 +189,12 @@ def transform_geometry(geom: Dict[str, Any], tf: Transformer) -> Dict[str, Any]:
         return {"type": "Point", "coordinates": tx_point(c)}
 
     if t == "LineString":
-        return {"type": "LineString", "coordinates": [tx_point(p) for p in c]}
+        return {"type": "LineString", "coordinates": [tx_point(p) for p in (c or [])]}
 
     if t == "Polygon":
-        return {"type": "Polygon", "coordinates": [[tx_point(p) for p in ring] for ring in c]}
+        # Polygon coords = [outerRing, hole1, hole2...]
+        rings = c or []
+        return {"type": "Polygon", "coordinates": [[tx_point(p) for p in (ring or [])] for ring in rings]}
 
     raise ValueError(f"Unsupported geometry type: {t}")
 
@@ -218,6 +218,25 @@ def iter_lonlat(geom_ll: Dict[str, Any]):
 
 
 # ----------------------------
+# Entities iterator (handles INSERT blocks)
+# ----------------------------
+def iter_entities_with_blocks(msp):
+    """
+    Many CAD files store geometry inside blocks (INSERT).
+    This expands inserts into "virtual entities" so conversion works better.
+    """
+    for ent in msp:
+        if ent.dxftype() == "INSERT":
+            try:
+                for v in ent.virtual_entities():
+                    yield v
+            except Exception:
+                continue
+        else:
+            yield ent
+
+
+# ----------------------------
 # KML + Map Preview
 # ----------------------------
 def ensure_ring_closed(ring: List[List[float]]) -> List[List[float]]:
@@ -225,7 +244,18 @@ def ensure_ring_closed(ring: List[List[float]]) -> List[List[float]]:
         ring = ring + [ring[0]]
     return ring
 
+def _valid_pair(p) -> bool:
+    try:
+        lon = float(p[0])
+        lat = float(p[1])
+        return math.isfinite(lon) and math.isfinite(lat)
+    except Exception:
+        return False
+
 def write_kml(feature_collection: Dict[str, Any], name: str) -> str:
+    """
+    SAFE: skips invalid geometries instead of crashing.
+    """
     kml = simplekml.Kml()
     kml.document.name = name
 
@@ -236,33 +266,55 @@ def write_kml(feature_collection: Dict[str, Any], name: str) -> str:
             folders[layer] = kml.newfolder(name=layer)
         return folders[layer]
 
-    for feat in feature_collection["features"]:
-        props = feat.get("properties", {})
+    for feat in feature_collection.get("features", []):
+        props = feat.get("properties", {}) or {}
         layer_name = props.get("layer", "Layer 0")
         ent_name = props.get("entity", "DXF Entity")
-        geom = feat["geometry"]
+        geom = feat.get("geometry") or {}
         folder = folder_for(layer_name)
 
-        t = geom["type"]
-        c = geom["coordinates"]
+        t = geom.get("type")
+        c = geom.get("coordinates")
 
         if t == "Point":
-            lon, lat = c
-            folder.newpoint(name=ent_name, coords=[(lon, lat)])
+            if isinstance(c, list) and len(c) >= 2 and _valid_pair(c):
+                folder.newpoint(name=ent_name, coords=[(c[0], c[1])])
+            continue
 
-        elif t == "LineString":
-            coords = [(p[0], p[1]) for p in c]
-            folder.newlinestring(name=ent_name, coords=coords)
+        if t == "LineString":
+            if not isinstance(c, list):
+                continue
+            coords = [(p[0], p[1]) for p in c if isinstance(p, list) and len(p) >= 2 and _valid_pair(p)]
+            if len(coords) >= 2:
+                folder.newlinestring(name=ent_name, coords=coords)
+            continue
 
-        elif t == "Polygon":
-            rings = c
-            outer = ensure_ring_closed(rings[0]) if rings else []
-            holes = [ensure_ring_closed(r) for r in rings[1:]] if len(rings) > 1 else []
-            folder.newpolygon(
-                name=ent_name,
-                outerboundaryis=[(p[0], p[1]) for p in outer] if outer else None,
-                innerboundaryis=[[(p[0], p[1]) for p in r] for r in holes] if holes else None,
-            )
+        if t == "Polygon":
+            if not isinstance(c, list) or not c:
+                continue
+
+            outer_raw = c[0] or []
+            outer = ensure_ring_closed([p for p in outer_raw if isinstance(p, list) and len(p) >= 2 and _valid_pair(p)])
+            outer_coords = [(p[0], p[1]) for p in outer]
+
+            # KML polygon needs a real ring (min 4 including closure)
+            if len(outer_coords) < 4:
+                continue
+
+            holes_coords = []
+            for hole_raw in c[1:]:
+                hole_raw = hole_raw or []
+                hole = ensure_ring_closed([p for p in hole_raw if isinstance(p, list) and len(p) >= 2 and _valid_pair(p)])
+                hole_xy = [(p[0], p[1]) for p in hole]
+                if len(hole_xy) >= 4:
+                    holes_coords.append(hole_xy)
+
+            if holes_coords:
+                folder.newpolygon(name=ent_name, outerboundaryis=outer_coords, innerboundaryis=holes_coords)
+            else:
+                folder.newpolygon(name=ent_name, outerboundaryis=outer_coords)
+
+            continue
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".kml", prefix=f"{name}_")
     tmp.close()
@@ -307,7 +359,7 @@ def leaflet_iframe(feature_collection: Dict[str, Any]) -> str:
   baseLayers["OpenStreetMap"].addTo(map);
 
   const overlay = L.geoJSON(geojson, {{
-    style: (f) => ({{ weight: 2, fillOpacity: 0.15 }}),
+    style: () => ({{ weight: 2, fillOpacity: 0.15 }}),
     pointToLayer: (f, latlng) => L.circleMarker(latlng, {{ radius: 5, weight: 2, fillOpacity: 0.9 }})
   }}).addTo(map);
 
@@ -344,7 +396,7 @@ INTRO_MAP = """
 
 
 # ----------------------------
-# Main conversion
+# UI handlers
 # ----------------------------
 def on_upload(dxf_path: Optional[str]):
     if not dxf_path:
@@ -364,7 +416,7 @@ def on_upload(dxf_path: Optional[str]):
 
     detected, msg = detect_source_crs(dxf_path)
 
-    # If detected is EPSG and exists in dropdown, select it automatically
+    # If detected is exactly one of dropdown values, select it
     if detected and detected in SOURCE_ALLOWED_VALUES:
         return (
             gr.update(value=detected),
@@ -372,7 +424,7 @@ def on_upload(dxf_path: Optional[str]):
             gr.update(visible=False, value=""),
         )
 
-    # If detected is not an allowed dropdown value, keep AUTO and put it into Custom field (hidden until user selects Custom)
+    # If detected is some custom text (WKT/PROJ), store it into hidden custom box
     if detected and detected not in SOURCE_ALLOWED_VALUES:
         return (
             gr.update(value="__AUTO__"),
@@ -388,10 +440,9 @@ def on_upload(dxf_path: Optional[str]):
 
 def toggle_custom_visibility(source_value: str, custom_value: str):
     show = (source_value == "__CUSTOM__")
-    return gr.update(visible=show, value=custom_value if show else custom_value)
+    return gr.update(visible=show, value=custom_value)
 
 def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, custom_crs: str, detected_status: str):
-    # Always return outputs (even on error) so the UI doesn't show only a red "Error"
     try:
         if not dxf_path:
             raise ValueError("Please upload a DXF file.")
@@ -400,20 +451,17 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
         if p.suffix.lower() != ".dxf":
             raise ValueError("Only DXF is supported. Please upload a .dxf file.")
 
-        # Target fixed for KML
         target_value = TARGET_VALUE
 
-        # Resolve source CRS input
-        source_input = None
+        # Resolve source CRS
         used_auto_msg = ""
-
         if source_value == "__AUTO__":
             detected, msg = detect_source_crs(dxf_path)
             used_auto_msg = msg
             if not detected:
                 raise ValueError(
                     "Auto-detect could not determine the Source CRS.\n"
-                    "Please choose the correct Source CRS from the dropdown (or use Custom)."
+                    "Please choose the Source CRS from the dropdown or use Custom."
                 )
             source_input = detected
 
@@ -425,11 +473,9 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
         else:
             source_input = source_value
 
-        # Build transformer
         src_crs = CRS.from_user_input(source_input)
         tf = Transformer.from_crs(src_crs, TARGET_CRS, always_xy=True)
 
-        # Read DXF
         doc = ezdxf.readfile(str(p))
         msp = doc.modelspace()
 
@@ -441,16 +487,12 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
         max_lon = -math.inf
         max_lat = -math.inf
 
-        for ent in gfilter(msp):
+        # Expand blocks and then filter to geometries ezdxf can convert
+        for ent in gfilter(iter_entities_with_blocks(msp)):
             try:
-                # proxy() signature can vary slightly; handle both
-                try:
-                    gp = proxy(ent, distance=float(DEFAULT_FLATTENING_DISTANCE))
-                except TypeError:
-                    gp = proxy(ent, float(DEFAULT_FLATTENING_DISTANCE))
-
+                gp = proxy(ent, distance=float(DEFAULT_FLATTENING_DISTANCE))
                 mapping = getattr(gp, "__geo_interface__", None)
-                if not mapping:
+                if not isinstance(mapping, dict):
                     skipped += 1
                     continue
 
@@ -466,12 +508,11 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
                     g_ll = transform_geometry(g, tf)
 
                     for lon, lat in iter_lonlat(g_ll):
-                        if not (math.isfinite(lon) and math.isfinite(lat)):
-                            continue
-                        min_lon = min(min_lon, lon)
-                        min_lat = min(min_lat, lat)
-                        max_lon = max(max_lon, lon)
-                        max_lat = max(max_lat, lat)
+                        if math.isfinite(lon) and math.isfinite(lat):
+                            min_lon = min(min_lon, lon)
+                            min_lat = min(min_lat, lat)
+                            max_lon = max(max_lon, lon)
+                            max_lat = max(max_lat, lat)
 
                     features.append({
                         "type": "Feature",
@@ -488,8 +529,7 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
         if not features:
             raise ValueError(
                 "No convertible geometries were exported.\n"
-                "This can happen if the DXF contains unsupported entity types or only 3D/annotation objects.\n"
-                "Try a simpler DXF (polylines/lines) or export again from CAD."
+                "If your DXF contains only text/annotations or only unsupported entities, export again as polylines/lines."
             )
 
         fc = {"type": "FeatureCollection", "features": features}
@@ -502,7 +542,7 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
             math.isfinite(min_lon) and math.isfinite(max_lon)
             and (min_lon < -180 or max_lon > 180 or min_lat < -90 or max_lat > 90)
         ):
-            warning = "\n\n⚠️ **Warning:** Output bounds look unusual for EPSG:4326. Check the selected Source CRS."
+            warning = "\n\n⚠️ **Warning:** Output bounds look unusual for EPSG:4326. Verify the selected Source CRS."
 
         report = (
             f"### Conversion Report\n"
@@ -515,7 +555,6 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
             f"{warning}"
         )
 
-        # Update status line if AUTO used
         status_out = detected_status
         if source_value == "__AUTO__":
             status_out = f"**Detected Source CRS:** {used_auto_msg}"
@@ -523,13 +562,12 @@ def convert_dxf_to_kml(dxf_path: str, source_value: str, target_value: str, cust
         return map_html, gr.update(value=kml_path, visible=True), report, status_out
 
     except Exception as e:
-        err = str(e)
-        report = f"### Error\n{err}"
+        report = f"### Error\n{e}"
         return INTRO_MAP, gr.update(visible=False, value=None), report, detected_status
 
 
 # ----------------------------
-# UI
+# UI Layout
 # ----------------------------
 CSS = """
 .gradio-container { max-width: 1200px !important; }
@@ -545,7 +583,6 @@ with gr.Blocks(css=CSS, title="DXF → KML Converter") as demo:
     with gr.Row():
         with gr.Column(scale=5):
             dxf_file = gr.File(label="Upload DXF", file_types=[".dxf"], type="filepath")
-
             detected_md = gr.Markdown("**Detected Source CRS:** —")
 
             source_crs = gr.Dropdown(
@@ -574,21 +611,9 @@ with gr.Blocks(css=CSS, title="DXF → KML Converter") as demo:
         with gr.Column(scale=7):
             preview = gr.HTML(value=INTRO_MAP)
 
-    # Auto-detect on upload
-    dxf_file.change(
-        fn=on_upload,
-        inputs=[dxf_file],
-        outputs=[source_crs, detected_md, custom_crs],
-    )
+    dxf_file.change(fn=on_upload, inputs=[dxf_file], outputs=[source_crs, detected_md, custom_crs])
+    source_crs.change(fn=toggle_custom_visibility, inputs=[source_crs, custom_crs], outputs=[custom_crs])
 
-    # Show/hide custom CRS input
-    source_crs.change(
-        fn=toggle_custom_visibility,
-        inputs=[source_crs, custom_crs],
-        outputs=[custom_crs],
-    )
-
-    # Convert
     btn.click(
         fn=convert_dxf_to_kml,
         inputs=[dxf_file, source_crs, target_crs, custom_crs, detected_md],
