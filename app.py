@@ -10,6 +10,11 @@ import ezdxf
 from pyproj import CRS, Transformer
 import simplekml
 
+theme = gr.themes.Base(
+    primary_hue="blue",      # change to match your brand (e.g. "indigo", "teal", etc.)
+    secondary_hue="sky",
+    neutral_hue="slate",
+    
 # ezdxf geo helpers
 from ezdxf.addons.geo import proxy, gfilter
 
