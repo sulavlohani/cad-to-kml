@@ -298,10 +298,19 @@ def write_kml(feature_collection: Dict[str, Any], name: str) -> str:
             else:
                 folder.newpolygon(name=ent_name, outerboundaryis=outer_coords)
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".kml", prefix=f"{name}_")
-    tmp.close()
-    kml.save(tmp.name)
-    return tmp.name
+        # Make filename safe for filesystem
+        safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in str(name))
+        
+        # Create a unique temp folder (prevents collisions across users)
+        out_dir = Path(tempfile.mkdtemp(prefix="kml_"))
+        
+        # Required naming format:
+        # input_file_name_Reprojected_ToolsForEngineers.com.kml
+        out_path = out_dir / f"{safe_name}_Reprojected_ToolsForEngineers.com.kml"
+        
+        kml.save(str(out_path))
+        return str(out_path)
+
 
 def leaflet_iframe(feature_collection: Dict[str, Any]) -> str:
     geojson_str = json.dumps(feature_collection).replace("</", "<\\/")
