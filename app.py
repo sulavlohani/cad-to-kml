@@ -357,7 +357,7 @@ def leaflet_iframe(feature_collection: Dict[str, Any]) -> str:
   L.control.layers(baseLayers, {{"Converted DXF → KML (EPSG:4326)": overlay}}, {{collapsed: true}}).addTo(map);
 
   if (overlay.getLayers().length > 0) {{
-    map.fitBounds(overlay.getBounds().pad(0.25));  // zoom out a bit
+    map.fitBounds(overlay.getBounds().pad(0.40));  // zoom out a bit
   }} else {{
     map.setView([0,0], 2);
   }}
