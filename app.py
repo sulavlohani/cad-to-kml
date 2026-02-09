@@ -245,11 +245,17 @@ def _valid_pair(p) -> bool:
 def write_kml(feature_collection: Dict[str, Any], name: str) -> str:
     kml = simplekml.Kml()
     kml.document.name = name
+    kml.document.open = 1
+    kml.document.visibility = 1
 
-    folders = {}
+    folders: Dict[str, Any] = {}
+
     def folder_for(layer: str):
         if layer not in folders:
-            folders[layer] = kml.newfolder(name=layer)
+            f = kml.newfolder(name=layer)
+            f.open = 1
+            f.visibility = 1
+            folders[layer] = f
         return folders[layer]
 
     for feat in feature_collection.get("features", []):
@@ -298,18 +304,20 @@ def write_kml(feature_collection: Dict[str, Any], name: str) -> str:
             else:
                 folder.newpolygon(name=ent_name, outerboundaryis=outer_coords)
 
-        # Make filename safe for filesystem
-        safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in str(name))
-        
-        # Create a unique temp folder (prevents collisions across users)
-        out_dir = Path(tempfile.mkdtemp(prefix="kml_"))
-        
-        # Required naming format:
-        # input_file_name_Reprojected_ToolsForEngineers.com.kml
-        out_path = out_dir / f"{safe_name}_Reprojected_ToolsForEngineers.com.kml"
-        
-        kml.save(str(out_path))
-        return str(out_path)
+            continue
+
+        # Ignore unsupported geometry types safely
+        continue
+
+    # ✅ Save ONCE after processing ALL features (ALL layers included)
+    safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in str(name))
+    safe_name = safe_name.strip("._-") or "output"
+
+    out_dir = Path(tempfile.mkdtemp(prefix="kml_"))
+    out_path = out_dir / f"{safe_name}_Reprojected_ToolsForEngineers.com.kml"
+    kml.save(str(out_path))
+    return str(out_path)
+
 
 
 def leaflet_iframe(feature_collection: Dict[str, Any]) -> str:
