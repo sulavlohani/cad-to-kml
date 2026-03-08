@@ -1,3 +1,4 @@
+import os
 import json
 import math
 import html as html_lib
@@ -614,4 +615,9 @@ with gr.Blocks(css=CSS, theme=theme, js=FORCE_LIGHT_JS, title="DXF → KML Conve
         outputs=[preview, download, report, detected_md],
     )
 
-demo.queue().launch()
+if __name__ == "__main__":
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=int(os.environ.get("PORT", 10000)),
+        show_error=True,
+    )
