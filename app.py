@@ -606,18 +606,32 @@ with gr.Blocks(css=CSS, theme=theme, js=FORCE_LIGHT_JS, title="DXF → KML Conve
         with gr.Column(scale=7):
             preview = gr.HTML(value=INTRO_MAP)
 
-    dxf_file.change(fn=on_upload, inputs=[dxf_file], outputs=[source_crs, detected_md, custom_crs])
-    source_crs.change(fn=toggle_custom_visibility, inputs=[source_crs, custom_crs], outputs=[custom_crs])
+    dxf_file.change(
+    fn=on_upload,
+    inputs=[dxf_file],
+    outputs=[source_crs, detected_md, custom_crs],
+    queue=False,
+)
 
-    btn.click(
-        fn=convert_dxf_to_kml,
-        inputs=[dxf_file, source_crs, custom_crs, detected_md],
-        outputs=[preview, download, report, detected_md],
-    )
+source_crs.change(
+    fn=toggle_custom_visibility,
+    inputs=[source_crs, custom_crs],
+    outputs=[custom_crs],
+    queue=False,
+)
+
+btn.click(
+    fn=convert_dxf_to_kml,
+    inputs=[dxf_file, source_crs, custom_crs, detected_md],
+    outputs=[preview, download, report, detected_md],
+    queue=False,
+    show_progress="minimal",
+)
 
 if __name__ == "__main__":
-    demo.queue().launch(
-        server_name="0.0.0.0",
-        server_port=int(os.environ.get("PORT", 10000)),
-        show_error=True,
-    )
+   demo.launch(
+    server_name="0.0.0.0",
+    server_port=int(os.environ.get("PORT", 10000)),
+    show_error=True,
+    max_file_size="300mb",
+)
